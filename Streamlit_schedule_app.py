@@ -360,33 +360,89 @@ while current <= end_date:
 # Show dates in columns (7 days per row for week view)
 st.subheader("📆 Your Schedule")
 
-# Week view
+# Get all time slots
+all_times = set()
+for date in dates:
+    schedule = get_schedule_for_day(date, custom_weekday, custom_saturday, custom_sunday)
+    all_times.update(schedule.keys())
+
+# Sort times
+sorted_times = sorted(all_times, key=lambda t: tuple(map(int, t.split(':'))))
+
+# Custom CSS for compact table
+st.markdown("""
+<style>
+    .schedule-table {
+        font-size: 0.85rem;
+    }
+    .time-header {
+        font-weight: bold;
+        background: #f0f2f6;
+        padding: 8px;
+        text-align: center;
+        border-radius: 4px;
+    }
+    .day-header {
+        font-weight: bold;
+        text-align: center;
+        padding: 8px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-radius: 4px;
+        margin-bottom: 8px;
+    }
+    .task-cell {
+        padding: 6px;
+        border: 1px solid #e0e0e0;
+        border-radius: 4px;
+        margin-bottom: 4px;
+        min-height: 60px;
+    }
+    .task-cell.completed {
+        opacity: 0.6;
+        text-decoration: line-through;
+    }
+    .task-title {
+        font-weight: 600;
+        font-size: 0.9rem;
+        margin-bottom: 2px;
+    }
+    .task-detail {
+        font-size: 0.75rem;
+        color: #666;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Show week by week
 for week_start_idx in range(0, len(dates), 7):
-    week_dates = dates[week_start_idx:week_start_idx + 7]
+    week_dates = dates[week_start_idx:min(week_start_idx + 7, len(dates))]
     
-    # Day headers
-    cols = st.columns(len(week_dates))
+    # Week header
+    st.markdown(f"### Week of {week_dates[0].strftime('%b %d')} - {week_dates[-1].strftime('%b %d')}")
+    
+    # Create header row
+    header_cols = st.columns([0.8] + [1.2] * len(week_dates))
+    with header_cols[0]:
+        st.markdown('<div class="time-header">Time</div>', unsafe_allow_html=True)
+    
     for idx, date in enumerate(week_dates):
-        with cols[idx]:
+        with header_cols[idx + 1]:
             day_name = date.strftime("%a")
             date_str = date.strftime("%b %d")
-            st.markdown(f"**{day_name}**<br>{date_str}", unsafe_allow_html=True)
+            st.markdown(f'<div class="day-header">{day_name}<br>{date_str}</div>', unsafe_allow_html=True)
     
-    # Get all time slots for this week
-    all_times = set()
-    for date in week_dates:
-        schedule = get_schedule_for_day(date, custom_weekday, custom_saturday, custom_sunday)
-        all_times.update(schedule.keys())
-    
-    # Sort times
-    sorted_times = sorted(all_times, key=lambda t: tuple(map(int, t.split(':'))))
-    
-    # Display each time slot
+    # Show each time slot as a row
     for time in sorted_times:
-        cols = st.columns(len(week_dates))
+        cols = st.columns([0.8] + [1.2] * len(week_dates))
         
+        # Time column
+        with cols[0]:
+            st.markdown(f'<div class="time-header">{format_time_12hr(time)}</div>', unsafe_allow_html=True)
+        
+        # Day columns
         for idx, date in enumerate(week_dates):
-            with cols[idx]:
+            with cols[idx + 1]:
                 date_str = date.strftime("%Y-%m-%d")
                 schedule = get_schedule_for_day(date, custom_weekday, custom_saturday, custom_sunday)
                 
@@ -397,55 +453,109 @@ for week_start_idx in range(0, len(dates), 7):
                 if task_data:
                     # Checkbox
                     checked = get_checkbox_state(date_str, time)
+                    
+                    # Unique key for each checkbox
+                    checkbox_key = f"cb_{date_str}_{time}_{week_start_idx}"
+                    
                     new_checked = st.checkbox(
-                        f"{format_time_12hr(time)}",
+                        "",
                         value=checked,
-                        key=f"check_{date_str}_{time}",
-                        label_visibility="visible"
+                        key=checkbox_key,
+                        label_visibility="collapsed"
                     )
                     
                     if new_checked != checked:
                         set_checkbox_state(date_str, time, new_checked)
+                        st.rerun()
                     
-                    # Task display or edit
-                    task_style = "text-decoration: line-through; opacity: 0.6;" if new_checked else ""
+                    # Task display
+                    task_class = "completed" if new_checked else ""
                     
                     if st.session_state.edit_mode:
+                        # Edit mode - show input fields
+                        task_input_key = f"task_{date_str}_{time}_{week_start_idx}"
+                        detail_input_key = f"detail_{date_str}_{time}_{week_start_idx}"
+                        
                         new_task = st.text_input(
                             "Task",
                             value=task_data['task'],
-                            key=f"task_{date_str}_{time}",
-                            label_visibility="collapsed"
+                            key=task_input_key,
+                            label_visibility="collapsed",
+                            placeholder="Task name"
                         )
                         
                         if task_data.get('detail'):
                             new_detail = st.text_input(
                                 "Detail",
-                                value=task_data['detail'],
-                                key=f"detail_{date_str}_{time}",
-                                label_visibility="collapsed"
+                                value=task_data.get('detail', ''),
+                                key=detail_input_key,
+                                label_visibility="collapsed",
+                                placeholder="Details"
                             )
-                        else:
-                            new_detail = task_data.get('detail', '')
                         
-                        # Save button
-                        if st.button("💾", key=f"save_{date_str}_{time}"):
-                            # Ask if apply to all or this day only
-                            st.session_state[f'edit_pending_{date_str}_{time}'] = {
-                                'task': new_task,
-                                'detail': new_detail,
-                                'period': task_data['period']
-                            }
+                        # Check if task was edited
+                        if new_task != task_data['task']:
+                            if st.button("💾 Save", key=f"save_{date_str}_{time}_{week_start_idx}"):
+                                # Show modal asking "this day only" or "all"
+                                st.session_state[f'pending_edit_{date_str}_{time}'] = {
+                                    'task': new_task,
+                                    'detail': new_detail if task_data.get('detail') else '',
+                                    'date': date_str,
+                                    'time': time,
+                                    'day_type': 'weekday' if date.weekday() < 5 else ('saturday' if date.weekday() == 5 else 'sunday')
+                                }
+                                st.rerun()
                     else:
-                        st.markdown(f'<p style="{task_style}"><strong>{task_data["task"]}</strong></p>', unsafe_allow_html=True)
-                        if task_data.get('detail'):
-                            st.markdown(f'<p style="{task_style}; font-size: 0.8em; color: #666;">{task_data["detail"]}</p>', unsafe_allow_html=True)
-                else:
-                    st.write("")
-        
-        st.divider()
+                        # View mode - show task
+                        st.markdown(f'''
+                        <div class="task-cell {task_class}">
+                            <div class="task-title">{task_data["task"]}</div>
+                            {f'<div class="task-detail">{task_data.get("detail", "")}</div>' if task_data.get("detail") else ''}
+                        </div>
+                        ''', unsafe_allow_html=True)
     
     st.markdown("---")
+
+# Handle pending edits (show modal)
+pending_edits = [k for k in st.session_state.keys() if k.startswith('pending_edit_')]
+if pending_edits:
+    edit_key = pending_edits[0]
+    edit_data = st.session_state[edit_key]
+    
+    st.warning("⚠️ You have unsaved changes!")
+    
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("✅ Apply to This Day Only"):
+            save_task_override(
+                edit_data['date'],
+                edit_data['time'],
+                edit_data['task'],
+                edit_data['detail'],
+                edit_data.get('period', 'work')
+            )
+            del st.session_state[edit_key]
+            st.success("Saved to this day only!")
+            st.rerun()
+    
+    with col_b:
+        day_type_name = edit_data['day_type'].capitalize() + 's'
+        if st.button(f"✅ Apply to All {day_type_name}"):
+            schedule_type = edit_data['day_type']
+            save_custom_schedule(
+                schedule_type,
+                edit_data['time'],
+                edit_data['task'],
+                edit_data['detail'],
+                edit_data.get('period', 'work')
+            )
+            del st.session_state[edit_key]
+            st.success(f"Saved to all {day_type_name}!")
+            st.rerun()
+    
+    if st.button("❌ Cancel"):
+        del st.session_state[edit_key]
+        st.rerun()
 
 # Footer
 st.caption("💡 Tip: Enable Edit Mode to customize tasks. Changes sync across all devices!")
